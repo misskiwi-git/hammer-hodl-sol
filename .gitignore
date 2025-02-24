@@ -1,0 +1,45 @@
+# 기본적인 Git 무시 파일들
+.DS_Store
+*.log
+*.out
+*.swp
+*.swo
+*.swn
+
+# Rust 관련 무시 파일
+target/
+Cargo.lock
+
+# Anchor 관련 무시 파일
+.anchor/
+node_modules/
+dist/
+test-ledger/
+.mocks/
+.anchor/program_cache/
+target/
+**/target/
+
+# Solana Key 파일 (보안 중요!)
+*.json
+*.keypair
+deployer-key.json
+test-keypair.json
+wallet.json
+
+# IDE 및 환경 설정 파일
+.vscode/
+.idea/
+*.iml
+*.sublime-workspace
+
+# 빌드 및 실행 결과 파일
+*.rmeta
+*.rlib
+*.so
+*.dylib
+*.exe
+*.dll
+*.wasm
+*.a
+*.o

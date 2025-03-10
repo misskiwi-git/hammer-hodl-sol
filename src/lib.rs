@@ -1,66 +1,86 @@
-use anchor_lang::prelude::*;
+use solana_program::{
+    account_info::{next_account_info, AccountInfo},
+    entrypoint,
+    entrypoint::ProgramResult,
+    msg,
+    program_error::ProgramError,
+    pubkey::Pubkey,
+    clock::Clock,
+    sysvar::Sysvar,
+    rent::Rent,
+};
 
-declare_id!("Fg6PaFpoGXkYsidMpWxqSW5FzL2u9U14mZnEKTVvDZp9"); // 실제 배포할 때는 변경 필요
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ContractState {
+    pub owner: Pubkey,
+    pub amount: u64,
+}
 
-#[program]
-pub mod solana_lock_contract {
-    use super::*;
+entrypoint!(process_instruction);
 
-    const UNLOCK_TIMESTAMP: i64 = 1821465600; // 2027년 12월 24일 (유닉스 타임스탬프)
+pub fn process_instruction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    let accounts_iter = &mut accounts.iter();
+    let account = next_account_info(accounts_iter)?;
+    let payer = next_account_info(accounts_iter)?;
 
-    #[derive(Accounts)]
-    pub struct Deposit<'info> {
-        #[account(mut)]
-        pub contract_account: Signer<'info>, // 컨트랙트가 SOL을 보관
-        #[account(mut)]
-        pub user: Signer<'info>, // 입금하는 사용자
-        pub system_program: Program<'info, System>,
+    let mut contract_state = ContractState::try_from_slice(&account.data.borrow())?;
+    let rent = Rent::get()?;
+    let rent_exempt_amount = rent.minimum_balance(account.data_len());
+
+    if contract_state.owner == Pubkey::default() {
+        contract_state.owner = *payer.key;
     }
 
-    pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
-        let ix = anchor_lang::solana_program::system_instruction::transfer(
-            &ctx.accounts.user.key(),
-            &ctx.accounts.contract_account.key(),
-            amount,
-        );
-        anchor_lang::solana_program::program::invoke(
-            &ix,
-            &[
-                ctx.accounts.user.to_account_info(),
-                ctx.accounts.contract_account.to_account_info(),
-                ctx.accounts.system_program.to_account_info(),
-            ],
-        )?;
+    match instruction_data[0] {
+        0 => {
+            let amount = u64::from_le_bytes(instruction_data[1..9].try_into().map_err(|_| ProgramError::InvalidInstructionData)?);
+            **account.lamports.borrow_mut() += amount;
+            **payer.lamports.borrow_mut() -= amount;
+            contract_state.amount += amount;
+            msg!("Deposited {} lamports", amount);
+        }
+        1 => {
+            if payer.key != &contract_state.owner {
+                return Err(ProgramError::MissingRequiredSignature);
+            }
+            let current_time = Clock::get()?.unix_timestamp;
+            let lock_time = 1766966400; // 2027-12-24
+            if current_time < lock_time {
+                return Err(ProgramError::InvalidAccountData);
+            }
+            let amount = u64::from_le_bytes(instruction_data[1..9].try_into().map_err(|_| ProgramError::InvalidInstructionData)?);
+            if amount > contract_state.amount || account.lamports() - amount < rent_exempt_amount {
+                return Err(ProgramError::InsufficientFunds);
+            }
+            **account.lamports.borrow_mut() -= amount;
+            **payer.lamports.borrow_mut() += amount;
+            contract_state.amount -= amount;
+            msg!("Withdrew {} lamports", amount);
+        }
+        _ => return Err(ProgramError::InvalidInstructionData),
+    }
+
+    contract_state.serialize(&mut &mut account.data.borrow_mut()[..])?;
+    Ok(())
+}
+
+impl ContractState {
+    fn try_from_slice(data: &[u8]) -> Result<Self, ProgramError> {
+        if data.len() < 40 { return Err(ProgramError::InvalidAccountData); }
+        Ok(ContractState {
+            owner: Pubkey::new_from_array(data[0..32].try_into().unwrap()),
+            amount: u64::from_le_bytes(data[32..40].try_into().unwrap()),
+        })
+    }
+
+    fn serialize(&self, output: &mut [u8]) -> Result<(), ProgramError> {
+        if output.len() < 40 { return Err(ProgramError::InvalidAccountData); }
+        output[0..32].copy_from_slice(&self.owner.to_bytes());
+        output[32..40].copy_from_slice(&self.amount.to_le_bytes());
         Ok(())
-    }
-
-    #[derive(Accounts)]
-    pub struct Withdraw<'info> {
-        #[account(mut, address = contract_account.key())]
-        pub contract_account: Signer<'info>,
-        #[account(mut, address = contract_account.key())] // 배포자 주소로만 출금 가능
-        pub withdraw_to: Signer<'info>,
-        pub system_program: Program<'info, System>,
-    }
-
-    pub fn withdraw(ctx: Context<Withdraw>) -> Result<()> {
-        let current_timestamp = Clock::get()?.unix_timestamp;
-        require!(current_timestamp >= UNLOCK_TIMESTAMP, CustomError::WithdrawNotAllowedYet);
-
-        let contract_balance = ctx.accounts.contract_account.to_account_info().lamports();
-        require!(contract_balance > 0, CustomError::NoFundsAvailable);
-
-        **ctx.accounts.contract_account.to_account_info().lamports.borrow_mut() -= contract_balance;
-        **ctx.accounts.withdraw_to.to_account_info().lamports.borrow_mut() += contract_balance;
-
-        Ok(())
-    }
-
-    #[error_code]
-    pub enum CustomError {
-        #[msg("Withdrawal is not allowed yet.")]
-        WithdrawNotAllowedYet,
-        #[msg("No funds available to withdraw.")]
-        NoFundsAvailable,
     }
 }

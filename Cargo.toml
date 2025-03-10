@@ -1,14 +1,15 @@
-[workspace]
-members = [
-    "programs/*"
-]
-resolver = "2"
+[package]
+name = "hammer-hodl-sol"
+version = "0.1.0"
+edition = "2021"
 
-[profile.release]
-overflow-checks = true
-lto = "fat"
-codegen-units = 1
-[profile.release.build-override]
-opt-level = 3
-incremental = false
-codegen-units = 1
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+solana-program = "1.18.4"
+
+[dev-dependencies]
+solana-program-test = "1.18.4"
+solana-sdk = "1.18.4"
+tokio = { version = "1", features = ["macros"] }
